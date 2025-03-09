@@ -151,7 +151,3 @@ The system automatically generates insights such as:
 - **Backend**: Python, FastAPI, Pandas, Scikit-learn
 - **Frontend**: Next.js, React, Recharts, react-live
 - **AI**: Google Gemini API
-
-## License
-
-MIT 
