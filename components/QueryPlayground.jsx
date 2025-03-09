@@ -6,11 +6,13 @@ import DataUploader from './DataUploader';
 import QueryInput from './QueryInput';
 import CodeDisplay from './CodeDisplay';
 import ChartPreview from './ChartPreview';
+import DataInsights from './DataInsights';
+import { processQuery, analyzeData, checkServerStatus } from '../services/api';
 
 // Initialize the Gemini API with a check for client-side rendering
 const genAI =
   typeof window !== 'undefined'
-    ? new GoogleGenerativeAI(process.env.NEXT_PUBLIC_GEMINI_API_KEY)
+    ? new GoogleGenerativeAI(process.env.NEXT_PUBLIC_GEMINI_API_KEY || 'dummy-key')
     : null;
 
 // Available chart types in Recharts
@@ -39,136 +41,96 @@ function Header() {
 export default function QueryPlayground() {
   const [userQuery, setUserQuery] = useState('');
   const [userData, setUserData] = useState(null);
-  const [sampleData, setSampleData] = useState(null);
+  const [dataSummary, setDataSummary] = useState(null);
   const [generatedCode, setGeneratedCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [editableCode, setEditableCode] = useState('');
   const [isMounted, setIsMounted] = useState(false);
   const [selectedChartType, setSelectedChartType] = useState('BarChart');
-  const [dataLimit, setDataLimit] = useState(10); // Default to 10 data points
+  const [dataLimit, setDataLimit] = useState(50); // Default to 50 data points
+  const [insights, setInsights] = useState([]);
+  const [additionalCharts, setAdditionalCharts] = useState([]);
+  const [serverStatus, setServerStatus] = useState(null);
+  const [geminiKeyValid, setGeminiKeyValid] = useState(true);
 
-  // Dark theme
-  const theme = {
-    primary: '#8B5CF6', // Purple
-    secondary: '#10B981', // Emerald
-    accent: '#F59E0B', // Amber
-    background: '#111827', // Dark gray
-    card: '#1F2937', // Darker gray
-    text: '#E5E7EB', // Light gray
-    border: '#374151', // Medium gray border
-    gradient: 'linear-gradient(to right, #8B5CF6, #6366F1)' // Purple to indigo gradient
-  };
+  // Sample data for testing
+  const [sampleData, setSampleData] = useState([
+    { category: 'Electronics', sales: 4000, profit: 2400, month: 'Jan' },
+    { category: 'Books', sales: 3000, profit: 1398, month: 'Jan' },
+    { category: 'Clothing', sales: 2000, profit: 9800, month: 'Jan' },
+    { category: 'Home', sales: 2780, profit: 3908, month: 'Jan' },
+    { category: 'Electronics', sales: 1890, profit: 4800, month: 'Feb' },
+    { category: 'Books', sales: 2390, profit: 3800, month: 'Feb' },
+    { category: 'Clothing', sales: 3490, profit: 4300, month: 'Feb' },
+    { category: 'Home', sales: 3490, profit: 4300, month: 'Feb' },
+    { category: 'Electronics', sales: 2490, profit: 4300, month: 'Mar' },
+    { category: 'Books', sales: 2490, profit: 4300, month: 'Mar' },
+    { category: 'Clothing', sales: 2490, profit: 4300, month: 'Mar' },
+    { category: 'Home', sales: 4490, profit: 7300, month: 'Mar' },
+  ]);
 
-  // Load sample data on component mount
+  // Set isMounted to true after component mounts and check server status
   useEffect(() => {
     setIsMounted(true);
-    const defaultData = [
-      { name: 'North', value: 4000 },
-      { name: 'South', value: 3000 },
-      { name: 'East', value: 2000 },
-      { name: 'West', value: 1000 }
-    ];
     
-    setSampleData(defaultData);
-    setUserData(defaultData);
+    // Check if Gemini API key is valid
+    const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+    if (!apiKey || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
+      setGeminiKeyValid(false);
+      setError('Gemini API key is not set. Please add your API key to .env.local file.');
+    }
+    
+    // Check server status
+    const checkServer = async () => {
+      try {
+        const isRunning = await checkServerStatus();
+        setServerStatus(isRunning);
+      } catch (err) {
+        console.error('Error checking server status:', err);
+        setServerStatus(false);
+      }
+    };
+    
+    checkServer();
   }, []);
 
-  // Function to aggregate data for better visualization
-  const aggregateData = (data, maxEntries = 15) => {
-    if (!data || data.length <= maxEntries) return data;
-
-    const firstItem = data[0];
-    const keys = Object.keys(firstItem);
-
-    // Special handling for medical datasets (e.g., diabetes dataset)
-    if (keys.includes('Outcome') || keys.includes('Age')) {
-      if (keys.includes('Outcome')) {
-        const aggregated = [
-          { category: 'Positive (1)', count: 0 },
-          { category: 'Negative (0)', count: 0 }
-        ];
-
-        data.forEach(item => {
-          if (item.Outcome === 1 || item.Outcome === '1') {
-            aggregated[0].count++;
-          } else {
-            aggregated[1].count++;
-          }
-        });
-        return aggregated;
-      }
-
-      if (keys.includes('Age')) {
-        const ageRanges = {
-          '20-29': { category: '20-29', count: 0 },
-          '30-39': { category: '30-39', count: 0 },
-          '40-49': { category: '40-49', count: 0 },
-          '50-59': { category: '50-59', count: 0 },
-          '60+': { category: '60+', count: 0 }
-        };
-
-        data.forEach(item => {
-          const age = Number(item.Age);
-          if (age < 30) ageRanges['20-29'].count++;
-          else if (age < 40) ageRanges['30-39'].count++;
-          else if (age < 50) ageRanges['40-49'].count++;
-          else if (age < 60) ageRanges['50-59'].count++;
-          else ageRanges['60+'].count++;
-        });
-        return Object.values(ageRanges);
+  // Handle data upload
+  const handleDataUpload = async (data, summary = null) => {
+    setUserData(data);
+    
+    // If summary is provided from the backend, use it
+    if (summary) {
+      setDataSummary(summary);
+    } 
+    // Otherwise, get insights from the backend if it's available
+    else if (data && serverStatus) {
+      try {
+        const result = await analyzeData(data);
+        setDataSummary(result);
+      } catch (error) {
+        console.error('Error analyzing data:', error);
       }
     }
-
-    // Look for numeric fields that can be aggregated
-    const numericFields = keys.filter(
-      key => typeof firstItem[key] === 'number' || !isNaN(Number(firstItem[key]))
-    );
-    // Look for potential category fields
-    const categoryFields = keys.filter(
-      key => typeof firstItem[key] === 'string' && !numericFields.includes(key)
-    );
-
-    if (numericFields.length > 0 && categoryFields.length > 0) {
-      const categoryField = categoryFields[0];
-      const numericField = numericFields[0];
-
-      const aggregated = {};
-      data.forEach(item => {
-        const category = item[categoryField];
-        if (!aggregated[category]) {
-          aggregated[category] = { [categoryField]: category, [numericField]: 0, count: 0 };
-        }
-        aggregated[category][numericField] += Number(item[numericField]);
-        aggregated[category].count += 1;
-      });
-
-      const result = Object.values(aggregated)
-        .sort((a, b) => b[numericField] - a[numericField])
-        .slice(0, maxEntries);
-      return result;
-    }
-
-    if (numericFields.length > 0) {
-      const result = [];
-      numericFields.forEach(field => {
-        const sum = data.reduce((acc, item) => acc + Number(item[field] || 0), 0);
-        const avg = sum / data.length;
-        result.push({
-          metric: field,
-          average: parseFloat(avg.toFixed(2)),
-          count: data.length
-        });
-      });
-      return result;
-    }
-
-    return data.slice(0, maxEntries);
+    
+    // Reset other states
+    setGeneratedCode('');
+    setEditableCode('');
+    setUserQuery('');
+    setInsights([]);
+    setAdditionalCharts([]);
+    setError(null);
   };
 
+  // Handle query submission
   const handleQuerySubmit = async () => {
-    if (!genAI) {
-      setError('API client not initialized. Please try again.');
+    if (!userQuery.trim() || !userData) {
+      setError('Please enter a query and upload data first.');
+      return;
+    }
+    
+    if (!geminiKeyValid) {
+      setError('Gemini API key is not set. Please add your API key to .env.local file.');
       return;
     }
 
@@ -176,401 +138,283 @@ export default function QueryPlayground() {
     setError(null);
 
     try {
-      const rawData = userData || sampleData;
+      let processedData = userData;
+      let suggestedVisualization = selectedChartType;
+      let dataInsights = [];
       
-      // Aggregate data for better visualization - limit to user-selected number of items
-      const aggregatedData = aggregateData(rawData).slice(0, dataLimit);
-      const dataString = JSON.stringify(aggregatedData, null, 2);
-      
-      // Analyze the data structure to find appropriate keys
-      const firstItem = aggregatedData[0];
-      const keys = Object.keys(firstItem);
-      const potentialXAxisKeys = keys.filter(k => typeof firstItem[k] === 'string' || k === 'category' || k === 'name');
-      const potentialValueKeys = keys.filter(k => typeof firstItem[k] === 'number' || k === 'count' || k === 'value');
-      
-      const xAxisKey = potentialXAxisKeys.length > 0 ? potentialXAxisKeys[0] : 'category';
-      const valueKey = potentialValueKeys.length > 0 ? potentialValueKeys[0] : 'count';
-      
-      // Let Gemini generate the chart code with minimal guidance
-      try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-        
-        const prompt = `
-You are an expert in data visualization using React with the Recharts library.
-
-I need you to create a ${selectedChartType} visualization for this data:
-${dataString}
-
-${userQuery ? `The user wants: "${userQuery}"` : ''}
-
-IMPORTANT GUIDELINES:
-1. Create a React functional component that uses Recharts to visualize the data
-2. The data has been limited to ${dataLimit} items for performance reasons so add these aggregated datapoints to the returned code.
-3. Use a dark theme with colors like #8B5CF6 (purple), #10B981 (green), #F59E0B (amber)
-4. Include a ResponsiveContainer for proper sizing
-5. Add a title, tooltip, and legend
-6. For text elements, use color: '#E5E7EB' for visibility on dark backgrounds
-7. Use "${xAxisKey}" as the X-axis key and "${valueKey}" for the main value
-8. MUST include a render call at the end: render(<YourComponent data={data} />);
-9. Keep the code simple and focused on visualization
-
-ONLY return the complete React component code, nothing else. No explanations or markdown.
-`;
-
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        const generatedText = response.text();
-        
-        // Clean up the response
-        const cleanedCode = cleanGeneratedCode(generatedText);
-        
-        // Validate the code has the essential elements
-        if (cleanedCode && 
-            cleanedCode.includes('import') && 
-            cleanedCode.includes('ResponsiveContainer') && 
-            cleanedCode.includes('render(')) {
-          setGeneratedCode(cleanedCode);
-          setEditableCode(cleanedCode);
-        } else {
-          throw new Error("Generated code is missing essential elements");
+      // Process the query using the Python backend if available
+      if (serverStatus) {
+        try {
+          const result = await processQuery(userData, userQuery, dataLimit);
+          
+          // Update the data with processed data from the backend
+          processedData = result.processed_data;
+          
+          // Store insights
+          dataInsights = result.insights || [];
+          
+          // Use the suggested visualization type if available
+          if (result.suggested_visualization) {
+            suggestedVisualization = result.suggested_visualization;
+          }
+          
+          // Store additional charts if available
+          if (result.charts) {
+            setAdditionalCharts(result.charts);
+          }
+          
+          setInsights(dataInsights);
+        } catch (error) {
+          console.error('Error processing query with backend:', error);
+          // Fall back to using the original data
+          processedData = userData;
         }
-      } catch (err) {
-        console.error('Error generating visualization:', err);
-        setError(`Failed to generate visualization: ${err.message || 'Please try again.'}`);
+      } else {
+        // If backend is not available, use the original data
+        dataInsights = ['Backend server is not available. Using original data without processing.'];
+        setInsights(dataInsights);
       }
-    } catch (err) {
-      console.error('Error processing data:', err);
-      setError(`Error processing data: ${err.message || 'Please try again.'}`);
+      
+      // Generate code using Gemini API
+      await generateChartCode(processedData, userQuery, suggestedVisualization);
+    } catch (error) {
+      console.error('Error processing query:', error);
+      setError(`Error processing query: ${error.message}`);
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Helper function to get chart elements based on chart type
-  const getChartElementsForType = (chartType, valueKey, xAxisKey = 'category') => {
-    const colors = {
-      primary: '#8B5CF6',
-      secondary: '#10B981',
-      accent: '#F59E0B',
-      highlight: '#EC4899'
-    };
+  // Generate chart code using Gemini API
+  const generateChartCode = async (data, query, chartType) => {
+    try {
+      // Create a prompt for Gemini
+      const prompt = `
+You are an expert in data visualization using React with the Recharts library.
+Generate JavaScript code to visualize the following data using a ${chartType}:
 
-    switch (chartType) {
-      case 'BarChart':
-        return {
-          imports: 'Bar',
-          content: `<Bar dataKey="${valueKey}" fill="${colors.primary}" />`
-        };
-      case 'LineChart':
-        return {
-          imports: 'Line',
-          content: `<Line type="monotone" dataKey="${valueKey}" stroke="${colors.primary}" activeDot={{ r: 8 }} />`
-        };
-      case 'AreaChart':
-        return {
-          imports: 'Area',
-          content: `<Area type="monotone" dataKey="${valueKey}" fill="${colors.primary}" stroke="${colors.primary}" fillOpacity={0.3} />`
-        };
-      case 'PieChart':
-        return {
-          imports: 'Pie, Cell',
-          content: `<Pie data={data} dataKey="${valueKey}" nameKey="${xAxisKey}" cx="50%" cy="50%" outerRadius={80} fill="${colors.primary}" label>
-            {data.map((entry, index) => (
-              <Cell key={index} fill={['${colors.primary}', '${colors.secondary}', '${colors.accent}', '${colors.highlight}'][index % 4]} />
-            ))}
-          </Pie>`
-        };
-      case 'ScatterChart':
-        return {
-          imports: 'Scatter',
-          content: `<Scatter name="${valueKey}" data={data} fill="${colors.primary}" />`
-        };
-      case 'RadarChart':
-        return {
-          imports: 'Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis',
-          content: `<PolarGrid stroke="#374151" />
-          <PolarAngleAxis dataKey="${xAxisKey}" tick={{ fill: '#E5E7EB' }} />
-          <PolarRadiusAxis tick={{ fill: '#E5E7EB' }} />
-          <Radar name="${valueKey}" dataKey="${valueKey}" stroke="${colors.primary}" fill="${colors.primary}" fillOpacity={0.6} />`
-        };
-      case 'ComposedChart':
-        return {
-          imports: 'Bar, Line',
-          content: `<Bar dataKey="${valueKey}" barSize={20} fill="${colors.primary}" />
-          <Line type="monotone" dataKey="${valueKey}" stroke="${colors.accent}" />`
-        };
-      default:
-        return {
-          imports: 'Bar',
-          content: `<Bar dataKey="${valueKey}" fill="${colors.primary}" />`
-        };
-    }
-  };
+Data: ${JSON.stringify(data, null, 2)}
 
-  // Clean up generated code by removing render calls and ensuring export default
-  const cleanGeneratedCode = (code) => {
-    // Remove markdown code blocks if present
-    let cleanedCode = code.replace(/```jsx|```js|```javascript|```/g, '').trim();
-    
-    // Remove any CommonJS module exports that might cause errors
-    cleanedCode = cleanedCode.replace(/module\.exports\s*=\s*/g, '');
-    
-    // Handle the case where there's both a render call and an export default
-    // Keep the render call and remove the export default
-    if (cleanedCode.includes('render(') && cleanedCode.includes('export default')) {
-      // Extract the component name from export default
-      const exportMatch = cleanedCode.match(/export\s+default\s+(\w+)/);
-      if (exportMatch && exportMatch[1]) {
-        const componentName = exportMatch[1];
-        // Remove the export default line
-        cleanedCode = cleanedCode.replace(/export\s+default\s+\w+;?/g, '');
-        
-        // Make sure the render call uses the correct component name
-        if (!cleanedCode.includes(`render(<${componentName}`)) {
-          // If there's a render call with a different component, replace it
-          cleanedCode = cleanedCode.replace(/render\s*\(\s*<\s*(\w+)/g, `render(<${componentName}`);
-        }
-      } else {
-        // If we can't extract the component name, just remove the export default line
-        cleanedCode = cleanedCode.replace(/export\s+default\s+\w+;?/g, '');
-      }
-    }
-    
-    // Remove any render method calls that might be causing issues
-    cleanedCode = cleanedCode.replace(/\w+\.render\(\);?/g, '');
-    
-    // If there's no render call, add one
-    if (!cleanedCode.includes('render(')) {
-      // Find the component name
-      const componentNameMatch = cleanedCode.match(/(?:function|const|class)\s+(\w+)/);
-      const componentName = componentNameMatch ? componentNameMatch[1] : 'Chart';
+User Query: "${query}"
+
+Requirements:
+1. Use the Recharts library
+2. Return ONLY valid JSX code for a React component that renders the chart
+3. Make the chart responsive and visually appealing
+4. Include proper labels, tooltips, and legends
+5. Choose appropriate colors that work well on a dark background
+6. Handle the data exactly as provided, don't modify the structure
+7. The component should be named "DynamicChart"
+8. IMPORTANT: Ensure the chart is properly scaled by setting appropriate width and height
+9. IMPORTANT: For ScatterChart, ensure points are properly sized and visible
+10. IMPORTANT: If data contains very small values (e.g., scientific notation like 5.551115123125783e-17), treat them as 0
+
+Return ONLY the component code, nothing else.
+`;
+
+      // Call Gemini API
+      const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      const text = response.text();
+
+      // Extract code from the response
+      const codeMatch = text.match(/```(?:jsx|javascript)?\s*([\s\S]*?)```/) || 
+                        text.match(/```(?:jsx|javascript)?\s*([\s\S]*)/);
       
-      // If there's an export default but no render call, add a render call
-      if (cleanedCode.includes('export default')) {
-        const exportMatch = cleanedCode.match(/export\s+default\s+(\w+)/);
-        if (exportMatch && exportMatch[1]) {
-          const exportedName = exportMatch[1];
-          cleanedCode = cleanedCode.replace(/export\s+default\s+\w+;?/g, '');
-          cleanedCode += `\n\n// Add render call for react-live
-render(<${exportedName} data={data} />);`;
-        } else {
-          cleanedCode = cleanedCode.replace(/export\s+default\s+/g, '');
-          cleanedCode += `\n\n// Add render call for react-live
-render(<${componentName} data={data} />);`;
-        }
-      } else {
-        cleanedCode += `\n\n// Add render call for react-live
-render(<${componentName} data={data} />);`;
-      }
-    }
-    
-    // Remove any hardcoded data arrays
-    const dataArrayMatch = cleanedCode.match(/const\s+data\s*=\s*\[[\s\S]*?\];/);
-    if (dataArrayMatch) {
-      cleanedCode = cleanedCode.replace(dataArrayMatch[0], '');
-    }
-    
-    // Remove document.getElementById references that won't work in the preview
-    cleanedCode = cleanedCode.replace(/document\.getElementById\([^)]*\)/g, 'null');
-    
-    // Make sure the component accepts a data prop
-    const componentMatch = cleanedCode.match(/(?:function|const)\s+(\w+)\s*\(\s*\)/);
-    if (componentMatch) {
-      const componentName = componentMatch[1];
-      cleanedCode = cleanedCode.replace(
-        new RegExp(`(function|const)\\s+${componentName}\\s*\\(\\s*\\)`, 'g'),
-        `$1 ${componentName} ({ data })`
-      );
-    }
-    
-    return cleanedCode;
-  };
-
-  const handleDataUpload = data => {
-    setUserData(data);
-    if (generatedCode) {
-      setGeneratedCode('');
-      setEditableCode('');
+      const cleanedCode = codeMatch ? codeMatch[1].trim() : text.trim();
+      
+      // Set the generated code
+      setGeneratedCode(cleanedCode);
+      setEditableCode(cleanedCode);
+    } catch (error) {
+      console.error('Error generating chart code:', error);
+      setError(`Error generating chart code: ${error.message}`);
     }
   };
 
-  const handleCodeChange = newCode => {
+  // Handle code edit
+  const handleCodeEdit = (newCode) => {
     setEditableCode(newCode);
   };
 
+  // Handle running the edited code
   const handleRunCode = () => {
-    console.log('Running code:', editableCode.substring(0, 100) + '...');
     setGeneratedCode(editableCode);
   };
 
-  if (!isMounted) {
-    return null;
-  }
-
   return (
-    <div style={{ backgroundColor: theme.background, color: theme.text, minHeight: '100vh' }}>
+    <div className="min-h-screen bg-gray-900 text-gray-100">
       <Header />
-      <div className="container mx-auto px-4 py-6">
-        {/* Top Controls Section */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-          <div className="lg:col-span-1">
-            <div className="p-6 rounded-lg shadow-md h-full" style={{ backgroundColor: theme.card, borderColor: theme.border }}>
-              <h2 className="text-xl font-semibold mb-4" style={{ color: theme.text }}>
-                Data Source
-              </h2>
-              <DataUploader onDataUpload={handleDataUpload} sampleData={sampleData} theme={theme} />
-            </div>
+      
+      {!geminiKeyValid && (
+        <div className="bg-yellow-100 p-4 text-yellow-800">
+          <div className="container mx-auto">
+            <h2 className="font-bold text-lg">⚠️ Gemini API Key Not Set</h2>
+            <p className="mt-1">
+              You need to set your Gemini API key in the <code className="bg-yellow-50 px-1 py-0.5 rounded">.env.local</code> file.
+            </p>
+            <p className="mt-2">
+              1. Get an API key from <a href="https://makersuite.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="underline">Google AI Studio</a>
+            </p>
+            <p>
+              2. Add it to your <code className="bg-yellow-50 px-1 py-0.5 rounded">.env.local</code> file:
+              <code className="block bg-yellow-50 p-2 mt-1 rounded">NEXT_PUBLIC_GEMINI_API_KEY=your_api_key_here</code>
+            </p>
           </div>
-
-          <div className="lg:col-span-1">
-            <div className="p-6 rounded-lg shadow-md h-full" style={{ backgroundColor: theme.card, borderColor: theme.border }}>
-              <h2 className="text-xl font-semibold mb-4" style={{ color: theme.text }}>
-                Chart Configuration
-              </h2>
-
-              <div className="mb-4">
-                <label className="block text-sm font-medium mb-1" style={{ color: theme.text }}>
-                  Chart Type
+        </div>
+      )}
+      
+      <div className="container mx-auto px-4 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          {/* Left Column - Data Upload & Query */}
+          <div className="lg:col-span-3 space-y-6">
+            <DataUploader 
+              onDataUpload={handleDataUpload} 
+              sampleData={sampleData} 
+            />
+            
+            <div className="bg-gray-800 rounded-lg shadow-md p-4">
+              <h2 className="text-xl font-bold mb-4 text-gray-100">Ask a Question</h2>
+              <QueryInput 
+                value={userQuery}
+                onChange={setUserQuery}
+                onSubmit={handleQuerySubmit}
+                isLoading={isLoading}
+                placeholder="e.g., Show a bar chart of sales by category"
+              />
+              
+              <div className="mt-4 space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">
+                    Preferred Chart Type
                 </label>
                 <select
                   value={selectedChartType}
                   onChange={(e) => setSelectedChartType(e.target.value)}
-                  className="w-full p-2 border rounded-md"
-                  style={{ 
-                    backgroundColor: theme.background, 
-                    color: theme.text,
-                    borderColor: theme.border 
-                  }}
-                >
-                  {CHART_TYPES.map(chart => (
-                    <option key={chart.value} value={chart.value}>
-                      {chart.label}
+                    className="w-full p-2 border border-gray-600 rounded-md bg-gray-700 text-white"
+                  >
+                    {CHART_TYPES.map((type) => (
+                      <option key={type.value} value={type.value}>
+                        {type.label}
                     </option>
                   ))}
                 </select>
               </div>
               
-              <div className="mb-4">
-                <label className="block text-sm font-medium mb-1" style={{ color: theme.text }}>
-                  Data Limit: {dataLimit} items
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">
+                    Max Data Points
                 </label>
-                <div className="flex items-center">
-                  <span className="mr-2 text-xs" style={{ color: theme.text }}>10</span>
                   <input
-                    type="range"
-                    min="10"
-                    max="100"
-                    step="10"
+                    type="number"
                     value={dataLimit}
-                    onChange={(e) => setDataLimit(Number(e.target.value))}
-                    className="w-full"
-                    style={{
-                      accentColor: theme.primary,
-                    }}
+                    onChange={(e) => setDataLimit(Math.max(5, parseInt(e.target.value) || 10))}
+                    min="5"
+                    max="1000"
+                    className="w-full p-2 border border-gray-600 rounded-md bg-gray-700 text-white"
                   />
-                  <span className="ml-2 text-xs" style={{ color: theme.text }}>100</span>
                 </div>
-                <p className="text-xs mt-1 opacity-70" style={{ color: theme.text }}>
-                  Adjust to control visualization performance
-                </p>
               </div>
 
-              <div className="mb-4">
-                <label className="block text-sm font-medium mb-1" style={{ color: theme.text }}>
-                  Query (Optional)
-                </label>
-                <textarea
-                  className="w-full p-3 border rounded-md focus:outline-none focus:ring-2"
-                  style={{
-                    backgroundColor: theme.background,
-                    color: theme.text,
-                    borderColor: theme.border,
-                    boxShadow: 'none'
-                  }}
-                  rows="3"
-                  placeholder="e.g., 'Show a bar chart of total values by name' or 'Create a pie chart showing the distribution of values'"
-          value={userQuery}
-                  onChange={e => setUserQuery(e.target.value)}
-                />
-                <p className="text-sm mt-2 opacity-70" style={{ color: theme.text }}>
-                  Enter a query to customize the chart or leave empty for basic visualization
-                </p>
-              </div>
-
-              <button
-                onClick={handleQuerySubmit}
-                className="w-full py-2 px-4 rounded-md text-white font-medium"
-                style={{ background: theme.gradient }}
-                disabled={isLoading}
-              >
-                {isLoading ? 'Generating...' : 'Generate Chart'}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Error Message */}
         {error && (
-          <div className="p-4 bg-red-900 text-red-100 rounded-md mb-6 border border-red-700">
+                <div className="mt-4 p-3 bg-red-900 text-red-100 rounded-md text-sm border border-red-700">
             {error}
           </div>
         )}
-        
-        {/* Main Content - Code and Chart side by side */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Left side - Code Editor */}
-          <div className="p-6 rounded-lg shadow-md" style={{ backgroundColor: theme.card, borderColor: theme.border }}>
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold" style={{ color: theme.text }}>
-                React/Recharts Code
-              </h2>
-              <button onClick={handleRunCode} className="px-3 py-1 rounded-md text-sm text-white" style={{ backgroundColor: theme.secondary }}>
-                Run
-              </button>
-            </div>
-            <div style={{ height: '400px', backgroundColor: '#1E1E1E', borderRadius: '0.375rem', overflow: 'hidden' }}>
-              <textarea
-                value={editableCode}
-                onChange={e => handleCodeChange(e.target.value)}
-                className="w-full h-full p-4 font-mono text-sm"
-                style={{
-                  backgroundColor: '#1E1E1E',
-                  color: '#D4D4D4',
-                  border: 'none',
-                  resize: 'none',
-                  outline: 'none'
-                }}
-        />
       </div>
           </div>
 
-          {/* Right side - Chart Preview */}
-          <div className="p-6 rounded-lg shadow-md" style={{ backgroundColor: theme.card, borderColor: theme.border }}>
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold" style={{ color: theme.text }}>
-                Chart Preview
-              </h2>
-              <div className="flex space-x-2">
+          {/* Middle Column - Code & Chart */}
+          <div className="lg:col-span-6 space-y-6">
+            {/* Generated Code */}
+            <div className="bg-gray-800 rounded-lg shadow-md overflow-hidden">
+              <div className="border-b border-gray-700 px-4 py-3 flex justify-between items-center">
+                <h3 className="font-medium text-gray-200">Generated Code</h3>
                 <button
-                  onClick={() => document.querySelector('.chart-preview button:first-child')?.click()}
-                  className="px-3 py-1 rounded-md text-sm"
-                  style={{ backgroundColor: `${theme.primary}30`, color: theme.primary }}
+                  onClick={handleRunCode}
+                  disabled={!editableCode}
+                  className={`px-3 py-1 text-sm rounded transition-colors ${
+                    editableCode 
+                      ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                      : 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                  }`}
                 >
-                  SVG
-                </button>
-                <button
-                  onClick={() => document.querySelector('.chart-preview button:nth-child(2)')?.click()}
-                  className="px-3 py-1 rounded-md text-sm"
-                  style={{ backgroundColor: `${theme.secondary}30`, color: theme.secondary }}
-                >
-                  PNG
+                  Run Code
                 </button>
               </div>
+              <div className="h-80">
+                <CodeDisplay 
+                  code={editableCode || '// No code generated yet. Upload data and ask a question to generate code.'}
+                  onChange={handleCodeEdit} 
+                />
+              </div>
+            </div>
+            
+            {/* Chart Preview */}
+            <div className="bg-gray-800 rounded-lg shadow-md p-4">
+              <h3 className="font-medium text-gray-200 mb-4">Chart Preview</h3>
+              {isMounted && (
+                <div className="h-96 flex items-center justify-center">
+                  {generatedCode ? (
+                    <ChartPreview 
+                      code={generatedCode} 
+                      data={userData || []} 
+                    />
+                  ) : (
+                    <div className="text-gray-400 text-center">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mx-auto mb-4 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                      </svg>
+                      <p className="text-lg">No chart generated yet</p>
+                      <p className="text-sm mt-2">Upload data and ask a question to generate a chart</p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
-            <div>
-              {generatedCode && <div className="mb-2 text-sm opacity-70" style={{ color: theme.text }}>Based on selected chart type:</div>}
-              <ChartPreview code={generatedCode} data={userData || sampleData} theme={theme} />
+            {/* Additional Charts */}
+            {additionalCharts.length > 0 && (
+              <div className="bg-gray-800 rounded-lg shadow-md p-4">
+                <h3 className="font-medium text-gray-200 mb-4">Additional Insights</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {additionalCharts.map((chart, index) => (
+                    <div key={index} className="border border-gray-700 rounded-lg p-3">
+                      <h4 className="font-medium text-gray-300 mb-2">{chart.title}</h4>
+                      <div className="h-64">
+                        <ChartPreview 
+                          chartType={chart.type}
+                          data={chart.data}
+                          autoGenerate={true}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          
+          {/* Right Column - Data Insights */}
+          <div className="lg:col-span-3 space-y-6">
+            {/* Data Insights Panel */}
+            <div className="bg-gray-800 rounded-lg shadow-md p-4">
+              <h3 className="text-xl font-bold mb-4 text-gray-100">Data Insights</h3>
+              {(insights.length > 0 || dataSummary) ? (
+                <DataInsights 
+                  insights={insights} 
+                  dataSummary={dataSummary} 
+                />
+              ) : (
+                <div className="text-gray-400 text-center py-8">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto mb-3 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <p>No insights available yet</p>
+                  <p className="text-sm mt-2">Upload data and ask a question to generate insights</p>
+                </div>
+              )}
             </div>
           </div>
         </div>

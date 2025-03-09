@@ -1,53 +1,39 @@
 'use client';
 
-import dynamic from 'next/dynamic';
+import { useEffect } from 'react';
+import AceEditor from 'react-ace';
 
-// Dynamically import AceEditor to avoid SSR issues
-const AceEditor = dynamic(
-  async () => {
-    const ace = await import('react-ace');
-    await import('ace-builds/src-noconflict/mode-javascript');
-    await import('ace-builds/src-noconflict/theme-github');
-    await import('ace-builds/src-noconflict/ext-language_tools');
-    return ace;
-  },
-  { ssr: false }
-);
+// Import Ace editor modes and themes
+import 'ace-builds/src-noconflict/mode-javascript';
+import 'ace-builds/src-noconflict/mode-jsx';
+import 'ace-builds/src-noconflict/theme-monokai';
+import 'ace-builds/src-noconflict/theme-github';
+import 'ace-builds/src-noconflict/ext-language_tools';
 
-export default function CodeDisplay({ code, onChange, onRunCode }) {
+export default function CodeDisplay({ code, onChange }) {
+  // Determine if we're in JSX mode based on the code content
+  const isJSX = code && (code.includes('React') || code.includes('jsx') || code.includes('<'));
+  
   return (
-    <div className="bg-white p-6 rounded-lg shadow-md">
-      <div className="flex justify-between items-center mb-4">
-        <h2 className="text-xl font-semibold">Generated Code</h2>
-        <button
-          onClick={onRunCode}
-          className="py-2 px-4 bg-green-600 hover:bg-green-700 text-white rounded-md"
-        >
-          Run Code
-        </button>
-      </div>
-      
-      <div className="border border-gray-300 rounded-md overflow-hidden">
-        {typeof window !== 'undefined' && (
-          <AceEditor
-            mode="javascript"
-            theme="github"
-            value={code}
-            onChange={onChange}
-            name="code-editor"
-            editorProps={{ $blockScrolling: true }}
-            setOptions={{
-              enableBasicAutocompletion: true,
-              enableLiveAutocompletion: true,
-              enableSnippets: true,
-              showLineNumbers: true,
-              tabSize: 2,
-            }}
-            width="100%"
-            height="400px"
-          />
-        )}
-      </div>
+    <div className="h-full w-full">
+      <AceEditor
+        mode={isJSX ? 'jsx' : 'javascript'}
+        theme="monokai"
+        onChange={onChange}
+        value={code}
+        name="code-editor"
+        editorProps={{ $blockScrolling: true }}
+        setOptions={{
+          enableBasicAutocompletion: true,
+          enableLiveAutocompletion: true,
+          enableSnippets: true,
+          showLineNumbers: true,
+          tabSize: 2,
+          showPrintMargin: false,
+          fontSize: 14,
+        }}
+        style={{ width: '100%', height: '100%' }}
+      />
     </div>
   );
 } 

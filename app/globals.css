@@ -3,16 +3,71 @@
 @tailwind utilities;
 
 :root {
-  --foreground-rgb: 0, 0, 0;
-  --background-rgb: 245, 247, 250;
+  --foreground-rgb: 229, 231, 235;
+  --background-start-rgb: 17, 24, 39;
+  --background-end-rgb: 31, 41, 55;
 }
 
 body {
   color: rgb(var(--foreground-rgb));
-  background: rgb(var(--background-rgb));
+  background: linear-gradient(
+      to bottom,
+      rgb(var(--background-start-rgb)),
+      rgb(var(--background-end-rgb))
+    )
+    fixed;
 }
 
+/* Dark theme for Recharts */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: #374151;
+}
+
+.recharts-text {
+  fill: #E5E7EB;
+}
+
+.recharts-default-tooltip {
+  background-color: #1F2937 !important;
+  border: 1px solid #374151 !important;
+  color: #E5E7EB !important;
+}
+
+.recharts-tooltip-label {
+  color: #E5E7EB !important;
+}
+
+.recharts-tooltip-item {
+  color: #E5E7EB !important;
+}
+
+.recharts-legend-item-text {
+  color: #E5E7EB !important;
+}
+
+/* Fix for chart scaling */
 .recharts-responsive-container {
   width: 100% !important;
-  height: 100% !important;
+  aspect-ratio: 16/9;
+  min-height: 300px !important;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1F2937;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #4B5563;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #6B7280;
 } 
